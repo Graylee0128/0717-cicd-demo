@@ -30,23 +30,23 @@ Windows PowerShell 啟用虛擬環境請改用 `.venv\Scripts\Activate.ps1`。
 - K8s：兩個 replica 搭配 readiness/liveness probe 做 rolling update。
 - Nginx：把 `se218.net` 流量轉到 K8s NodePort `30080`。
 
-## 需要你手動操作（一次性）
+## 已完成的 GitHub 設定
 
 ### 1. GitHub branch protection
 
-Repo → **Settings → Branches → Add branch protection rule**：
+`main` 已設定 branch protection：
 
 - Branch name pattern：`main`
-- 勾選 **Require status checks to pass before merging**
+- 已啟用 **Require status checks to pass before merging**
 - Required check：`test`
 
-完成後，故意讓 `tests/test_main.py` 斷言失敗並開 PR，確認紅燈時不能 merge；驗證後還原測試。
+## 需要你手動操作（一次性）
 
-### 2. GHCR image 公開權限
+### 1. GHCR image 公開權限
 
 第一次 main workflow 成功後，進入 GitHub 個人頁 → **Packages → 0717-cicd-demo → Package settings → Change visibility → Public**。否則 K8s 會出現 `ImagePullBackOff`；若必須保持 private，改在 cluster 建 `imagePullSecret`。
 
-### 3. 在 se218.net 的 K8s 套用 ArgoCD Application
+### 2. 在 se218.net 的 K8s 套用 ArgoCD Application
 
 在能操作該 cluster 的主機執行：
 
@@ -61,7 +61,7 @@ curl http://127.0.0.1:30080/health
 
 如果尚未安裝 ArgoCD，先依 workshop 的「安裝 ArgoCD」章節完成安裝，再執行上面指令。
 
-### 4. 修正 se218.net 的 Nginx upstream
+### 3. 修正 se218.net 的 Nginx upstream
 
 2026-07-16 實測：DNS 指向 `114.37.200.155`、80/443 已開啟，但 HTTP 回 `504 Gateway Time-out`，HTTPS 憑證主體與 `se218.net` 不符。先確認 NodePort 健康，再在 Nginx 的 `se218.net` server block 設定：
 
@@ -85,7 +85,7 @@ curl http://se218.net/health
 
 如果 Nginx 與 K8s node 不在同一台主機，把 `127.0.0.1` 改成能連到該 NodePort 的 node IP。
 
-### 5. 修正 HTTPS 憑證
+### 4. 修正 HTTPS 憑證
 
 確認 HTTP 已正常後，依主機既有憑證工具更新 `se218.net` 憑證；若既有環境使用 Certbot：
 
@@ -93,6 +93,10 @@ curl http://se218.net/health
 sudo certbot --nginx -d se218.net
 curl https://se218.net/health
 ```
+
+### 5. 故障演練
+
+故意讓 `tests/test_main.py` 的斷言失敗並開 PR，確認 `test` 紅燈時不能 merge；驗證後還原測試。
 
 ## 驗收
 
