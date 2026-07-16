@@ -13,7 +13,7 @@ PR -> pytest -> merge main -> build image -> GHCR
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pytest -v --cov=app --cov-fail-under=70
+python -m pytest -v --cov=app --cov-fail-under=70
 docker build -t 0717-cicd-demo .
 docker run --rm -p 8000:8000 0717-cicd-demo
 curl http://localhost:8000/health
