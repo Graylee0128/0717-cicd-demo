@@ -201,16 +201,24 @@ kubectl get nodes -o wide
 
 ```bash
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl get crd applications.argoproj.io
 kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
 kubectl get pods -n argocd
 ```
 
+[Argo CD 官方 Getting Started](https://argo-cd.readthedocs.io/en/stable/getting_started/) 目前建議使用 server-side apply，避免大型 CRD 超過 client-side annotation 大小限制。只有 `applications.argoproj.io` CRD 已 Established，Kubernetes 才認識 `kind: Application`。
+
 ### Step 6.3：套用 Application
 
+若目前 prompt 已在 `~/0717-cicd-demo`，不要再次 clone。先確認工作目錄與 remote：
+
 ```bash
-git clone https://github.com/Graylee0128/0717-cicd-demo.git
-cd 0717-cicd-demo
+pwd
+git remote get-url origin
+git log -1 --oneline
+git pull --ff-only
 kubectl apply -f argocd/application.yaml
 kubectl get applications -n argocd
 kubectl describe application cicd-demo -n argocd
@@ -362,6 +370,17 @@ kubectl rollout status deployment/cicd-demo -n cicd-demo --timeout=300s
 - HTTPS：certificate hostname 不符合 `se218.net`。
 - 判讀：edge/Nginx 有回應，但 upstream 與 TLS 尚未完成；不能宣稱 Minikube workload 已上線。
 - 下一步：依第 6 節完成 NodePort 直測、Nginx `<MINIKUBE_IP>:30080` 與 Certbot。
+
+### Debug 6：Kubernetes 不認識 Argo CD `Application`
+
+- 日期：2026-07-16。
+- 執行：`kubectl apply -f argocd/application.yaml`。
+- Log：`resource mapping not found`、`no matches for kind "Application" in version "argoproj.io/v1alpha1"`、`ensure CRDs are installed first`。
+- 根因：Minikube 尚未安裝 Argo CD 的 `applications.argoproj.io` CRD；不是 `application.yaml` API version 拼錯。
+- 修正：先以官方 server-side apply 安裝 Argo CD，等待 CRD Established 與 controllers Available，再重新套用 Application。
+- 驗證命令：`kubectl get crd applications.argoproj.io`、`kubectl get pods -n argocd`、`kubectl apply -f argocd/application.yaml`。
+- 同時觀察：當時已在 `~/0717-cicd-demo` 內又執行 `git clone`，產生巢狀 repo 的風險；這不是 CRD 錯誤根因，但後續應先用 `pwd` 與 `git remote get-url origin` 確認位置，避免再次 clone。
+- 狀態：修正步驟已補入報告；se218 實際安裝與 Application 成功狀態仍待 operator 執行後驗證。
 
 ## 10. 最終交付界線
 

@@ -50,6 +50,18 @@ Windows PowerShell 啟用虛擬環境請改用 `.venv\Scripts\Activate.ps1`。
 
 ## 需要你手動操作（一次性）
 
+### 0. 確認目前就在正確 repo
+
+如果 prompt 已顯示 `~/0717-cicd-demo (main)`，不要再次執行 `git clone`，否則會產生 `0717-cicd-demo/0717-cicd-demo` 巢狀目錄。先檢查：
+
+```bash
+pwd
+git remote get-url origin
+git log -1 --oneline
+```
+
+`origin` 應為 `https://github.com/Graylee0128/0717-cicd-demo.git`。只有主機上尚未存在 repo 時，才從 home directory clone。
+
 ### 1. 在 se218.net 啟動 Minikube
 
 SSH 登入 se218.net 後執行：
@@ -67,16 +79,19 @@ kubectl get nodes
 
 ```bash
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl get crd applications.argoproj.io
 kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
 kubectl get pods -n argocd
 ```
 
+若先套用 `argocd/application.yaml` 時看到 `no matches for kind "Application"`，代表 Argo CD CRD 尚未安裝；完成本步驟並確認 `applications.argoproj.io` 存在後再繼續。
+
 ### 3. 套用本 repo 的 ArgoCD Application
 
 ```bash
-git clone https://github.com/Graylee0128/0717-cicd-demo.git
-cd 0717-cicd-demo
+git pull --ff-only
 kubectl apply -f argocd/application.yaml
 kubectl get applications -n argocd
 kubectl wait --for=condition=Available deployment/cicd-demo -n cicd-demo --timeout=300s

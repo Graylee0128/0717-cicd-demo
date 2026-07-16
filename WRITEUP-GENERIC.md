@@ -349,21 +349,24 @@ kubectl get nodes -o wide
 依 [Argo CD 官方 Getting Started](https://argo-cd.readthedocs.io/en/stable/getting_started/)：
 
 ```bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl get crd applications.argoproj.io
 kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
 kubectl get pods -n argocd
 ```
 
-若 namespace 已存在，第一行會回 `AlreadyExists`；直接繼續即可。所有必要 Pod 應為 `Running`／Ready。
+第一行是 idempotent namespace 建立方式。server-side apply 可避免大型 CRD 超過 client-side annotation 大小限制。`applications.argoproj.io` 必須 Established，所有必要 Pod 也應為 `Running`／Ready。
 
 ### Step 8.3：套用 Application
 
-先在 部署 主機 clone repo，或把 `argocd/application.yaml` 傳到主機：
+只有 deployment host 尚未存在 repo 時才 clone；如果 prompt 已在 repo 內，先檢查 `pwd` 與 `git remote get-url origin`，不要再次 clone 造成巢狀目錄：
 
 ```bash
-git clone https://github.com/<GITHUB_USER>/<REPO>.git
-cd <REPO>
+pwd
+git remote get-url origin
+git pull --ff-only
 kubectl apply -f argocd/application.yaml
 kubectl get applications -n argocd
 kubectl describe application <APP_NAME> -n argocd
@@ -507,6 +510,20 @@ kubectl describe pod -n <K8S_NAMESPACE> <POD_NAME>
 ```
 
 確認 GHCR image 名稱全小寫、SHA 存在、package 是 Public；private package 則建立並引用 `imagePullSecret`。
+
+### `no matches for kind "Application"`
+
+完整訊息通常包含 `resource mapping not found` 與 `ensure CRDs are installed first`。這表示 Kubernetes API 尚未註冊 Argo CD Application CRD：
+
+```bash
+kubectl get crd applications.argoproj.io
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
+kubectl apply -f argocd/application.yaml
+```
+
+不要先改 `apiVersion` 或反覆套用 Application；先確認目前 kube context、CRD 與 Argo CD controllers。
 
 ### Argo CD 為 `OutOfSync` 或 `Degraded`
 
