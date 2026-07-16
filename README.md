@@ -4,7 +4,7 @@
 
 ```text
 PR -> pytest -> merge main -> build image -> GHCR
-   -> 更新 k8s image SHA -> ArgoCD sync -> K8s rolling update -> se218.net
+   -> 更新 gitops branch 的 image SHA -> ArgoCD sync -> K8s rolling update -> se218.net
 ```
 
 ## 本機驗證
@@ -25,10 +25,12 @@ Windows PowerShell 啟用虛擬環境請改用 `.venv\Scripts\Activate.ps1`。
 
 - PR：執行 pytest 與 coverage gate，未達 70% 失敗。
 - main：測試通過才 build，推送 `latest` 與 commit SHA 到 GHCR。
-- workflow：把 `k8s/deployment.yaml` 更新為不可變 SHA tag 並 push。
+- workflow：把 `gitops` branch 的 `k8s/deployment.yaml` 更新為不可變 SHA tag 並 push。
 - ArgoCD：偵測 manifest commit，自動 sync、self-heal、prune。
 - K8s：兩個 replica 搭配 readiness/liveness probe 做 rolling update。
 - Nginx：把 `se218.net` 流量轉到 K8s NodePort `30080`。
+
+完整建置與 debug 過程見 [WRITEUP.md](./WRITEUP.md)。
 
 ## 已完成的 GitHub 設定
 
@@ -102,7 +104,7 @@ curl https://se218.net/health
 
 - [ ] PR 自動測試，紅燈不能 merge
 - [ ] merge main 後 GHCR 同時有 SHA 與 latest tag
-- [ ] `k8s/deployment.yaml` 自動換成該 commit SHA
+- [ ] `gitops` branch 的 `k8s/deployment.yaml` 自動換成該 commit SHA
 - [ ] ArgoCD 顯示 `Synced / Healthy`
 - [ ] `kubectl rollout status deployment/cicd-demo -n cicd-demo` 成功
 - [ ] `https://se218.net/health` 回傳 `{"status":"ok"}`
