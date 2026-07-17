@@ -17,4 +17,4 @@ def test_root_has_version():
     assert response.status_code == 200
     assert response.json()["service"] == "0717-cicd-demo"
     assert response.json()["version"]
-    assert response.json()["build"] == "v1"
+    assert response.json()["build"] == "v2"
