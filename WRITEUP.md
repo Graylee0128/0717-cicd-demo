@@ -1,8 +1,8 @@
 # 0717 CI/CD Demo 技術文件（作業提交版）
 
-本文件記錄如何依照 [DevOps 綜合 Workshop](https://hackmd.io/@yillkid/S1llE_naZx)，在 [`Graylee0128/0717-cicd-demo`](https://github.com/Graylee0128/0717-cicd-demo) 建立 FastAPI → GitHub Actions → GHCR → GitOps → Argo CD → Minikube → `se218.net` 的 CI/CD。
+本文件記錄如何依照 [DevOps 綜合 Workshop](https://hackmd.io/@yillkid/S1llE_naZx)，在 [`Graylee0128/0717-cicd-demo`](https://github.com/Graylee0128/0717-cicd-demo) 建立 FastAPI → GitHub Actions → GHCR → GitOps → Argo CD → 本機 VM Minikube 的 CI/CD。
 
-> GitHub、GHCR 與 GitOps 自動化已完成並驗證。se218 主機上的 Minikube、Argo CD Application、Nginx upstream 與 TLS 必須由我登入主機後手動 bootstrap；做完一次後，後續版本才會由 Argo CD 自動部署。
+> GitHub、GHCR、GitOps 與本機 VM 的 Argo CD bootstrap 已完成並驗證。Application 首次套用與 V1 → V2 截圖必須由我登入 VM 操作；完成一次後，後續版本由 Argo CD 自動部署。本次不以 Nginx、DNS 或公網 TLS 作為驗收門檻。
 
 可套用到其他專案的版本見 [WRITEUP-GENERIC.md](./WRITEUP-GENERIC.md)。
 
@@ -16,8 +16,8 @@ PR
  -> push GHCR（commit SHA + latest）
  -> 更新 gitops branch 的 image SHA
  -> Argo CD auto-sync
- -> se218 Minikube rolling update
- -> Nginx / TLS 對外提供 se218.net
+ -> 本機 VM Minikube rolling update
+ -> NodePort 顯示 V1 / V2 結果
 ```
 
 | 項目 | 狀態 | 證據 |
@@ -28,8 +28,10 @@ PR
 | GHCR public pull | 完成 | anonymous manifest request HTTP 200；digest `sha256:1546583e...` |
 | GitOps image SHA 更新 | 完成 | `gitops/k8s/deployment.yaml` 已指向 main SHA `6a796481...` |
 | main branch protection | 完成 | Required status check：`test` |
-| se218 Minikube / Argo CD | 待手動 | 需要 se218 operator access |
-| Nginx / HTTPS | 待手動 | 2026-07-16 外部實測仍為 HTTP 504、TLS hostname mismatch |
+| 本機 VM Minikube / Argo CD bootstrap | 完成 | 2026-07-17：context `minikube`、Node `Ready`、Application CRD Established、7 個 Argo CD Pods Running |
+| Application / workload | 待手動 | 尚待套用 Application 並確認 `Synced / Healthy`、2 Pods Ready |
+| V1 → V2 NodePort | 待截圖 | 尚待記錄兩次 SHA、rolling update 與 `/` 回應 |
+| Nginx / HTTPS | 不納入本次驗收 | 既有 504 與 TLS mismatch 保留於 Debug 5 |
 
 ## 2. 架構決策
 
@@ -47,7 +49,7 @@ Developer -> PR -> main -> GitHub Actions -> GHCR:<SHA>
                                                 Argo CD
                                                    |
                                                    v
-Internet -> se218 Nginx -> Minikube :30080 -> Service -> 2 Pods
+VM terminal -> Minikube :30080 -> Service -> 2 Pods
 ```
 
 這樣可避免 build job 直接 push 受保護的 `main`，也保留每次部署的 Git 歷史。
@@ -62,7 +64,6 @@ Internet -> se218 Nginx -> Minikube :30080 -> Service -> 2 Pods
 ├── Dockerfile
 ├── requirements.txt
 ├── k8s/
-│   ├── namespace.yaml
 │   ├── deployment.yaml
 │   └── service.yaml
 ├── argocd/application.yaml
@@ -77,7 +78,7 @@ Internet -> se218 Nginx -> Minikube :30080 -> Service -> 2 Pods
 
 `app/main.py` 提供：
 
-- `GET /`：回傳 service 與版本。
+- `GET /`：回傳 service、版本與可截圖的 `build`（V1 / V2）。
 - `GET /health`：回傳 `{"status":"ok"}`，供測試與 Kubernetes probes 使用。
 
 ### Step 4.2：安裝與測試
@@ -182,9 +183,9 @@ docker/login-action@v4
 docker/build-push-action@v7
 ```
 
-## 6. Step-by-step：se218 Minikube 手動 CD bootstrap
+## 6. Step-by-step：本機 VM Minikube 手動 CD bootstrap
 
-以下全部在 se218 主機執行，不是在 Windows 或 GitHub runner 執行。
+以下全部在本機 VM（目前主機名稱為 `se218`）執行，不是在 Windows 或 GitHub runner 執行。
 
 ### Step 6.1：確認 Minikube
 
@@ -222,67 +223,45 @@ git pull --ff-only
 kubectl apply -f argocd/application.yaml
 kubectl get applications -n argocd
 kubectl describe application cicd-demo -n argocd
-kubectl wait --for=condition=Available deployment/cicd-demo -n cicd-demo --timeout=300s
-kubectl get pods -n cicd-demo -o wide
+kubectl wait --for=condition=Available deployment/cicd-demo -n argocd --timeout=300s
+kubectl get pods -n argocd -l app=cicd-demo -o wide
 ```
 
-Argo CD 應顯示 `Synced / Healthy`，Deployment 應有兩個 Ready Pods。
+Argo CD 應顯示 `Synced / Healthy`，Deployment 應有兩個 Ready Pods。Application、Deployment 與 Service 名稱仍為 `cicd-demo`，但全部放在既有 `argocd` namespace；因此不再保留 `k8s/namespace.yaml` 或 `CreateNamespace=true`。
 
 ### Step 6.4：直測 Minikube NodePort
 
 ```bash
 MINIKUBE_IP=$(minikube ip)
 echo "$MINIKUBE_IP"
-kubectl get service cicd-demo -n cicd-demo
+kubectl get service cicd-demo -n argocd
 curl --fail "http://${MINIKUBE_IP}:30080/health"
+curl --fail "http://${MINIKUBE_IP}:30080/"
 ```
 
-只有這一步回 `{"status":"ok"}` 後，才繼續改 Nginx。
+V1 預期 `/health` 回 `{"status":"ok"}`，`/` 包含 `"build":"v1"`。
 
-### Step 6.5：Nginx 指向 Minikube
+### Step 6.5：V2 自動 CD 與截圖
 
-先執行 `minikube ip`，把下方 `<MINIKUBE_IP>` 換成實際 IP：
+依 workshop 修改一行 API 結果，把 `app/main.py` 的 `build` 從 `v1` 改成 `v2`，並同步測試預期值。開 PR、等待 `test` 綠燈後 merge；workflow 會產生新的 commit-SHA image 並更新 `gitops`。實際 Deployment 仍使用 SHA tag，不使用可變的 `:v2` tag。
 
-```nginx
-server {
-    listen 80;
-    server_name se218.net;
-
-    location / {
-        proxy_pass http://<MINIKUBE_IP>:30080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-不要用 `127.0.0.1:30080`；Minikube NodePort 應使用 `minikube ip` 的結果。
+merge 前在 VM 開啟監看：
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
-curl --fail http://se218.net/health
+kubectl get pods -n argocd -l app=cicd-demo -w
 ```
 
-### Step 6.6：修正 TLS
-
-HTTP 成功後再更新憑證：
+完成後另開 terminal 驗證：
 
 ```bash
-sudo certbot --nginx -d se218.net
-sudo nginx -t
-sudo systemctl reload nginx
-curl --fail https://se218.net/health
+kubectl rollout status deployment/cicd-demo -n argocd --timeout=300s
+kubectl get application cicd-demo -n argocd
+kubectl get deployment cicd-demo -n argocd \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+curl --fail "http://$(minikube ip):30080/"
 ```
 
-檢查憑證主體、簽發者與效期：
-
-```bash
-openssl s_client -connect se218.net:443 -servername se218.net </dev/null 2>/dev/null \
-  | openssl x509 -noout -subject -issuer -dates
-```
+V2 預期使用不同 SHA，Application 回到 `Synced / Healthy`，`/` 包含 `"build":"v2"`。
 
 ## 7. 端到端驗收
 
@@ -295,24 +274,25 @@ openssl s_client -connect se218.net:443 -servername se218.net </dev/null 2>/dev/
 - [x] `gitops` manifest 自動使用 main commit SHA。
 - [x] `main` required status check 為 `test`。
 
-### se218（登入主機後勾選）
+### 本機 VM（登入後勾選）
 
 ```bash
 kubectl get applications -n argocd
-kubectl get deployment,pods,service -n cicd-demo -o wide
-kubectl rollout status deployment/cicd-demo -n cicd-demo --timeout=300s
-kubectl get deployment cicd-demo -n cicd-demo \
+kubectl get deployment/cicd-demo service/cicd-demo -n argocd -o wide
+kubectl get pods -n argocd -l app=cicd-demo -o wide
+kubectl rollout status deployment/cicd-demo -n argocd --timeout=300s
+kubectl get deployment cicd-demo -n argocd \
   -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
 curl --fail "http://$(minikube ip):30080/health"
-curl --fail http://se218.net/health
-curl --fail https://se218.net/health
+curl --fail "http://$(minikube ip):30080/"
+kubectl get namespace cicd-demo
 ```
 
 - [ ] Argo CD `Synced / Healthy`。
 - [ ] 兩個 Pods Ready。
 - [ ] NodePort health 成功。
-- [ ] HTTP health 成功。
-- [ ] HTTPS health 成功且憑證 hostname 正確。
+- [ ] `cicd-demo` namespace 為 `NotFound`。
+- [ ] V1 / V2 使用不同 SHA，V2 `/` 回 `"build":"v2"`。
 
 ## 8. Rollback
 
@@ -325,7 +305,7 @@ git pull --ff-only origin gitops
 git add k8s/deployment.yaml
 git commit -m "rollback: deploy <LAST_GOOD_SHA>"
 git push origin gitops
-kubectl rollout status deployment/cicd-demo -n cicd-demo --timeout=300s
+kubectl rollout status deployment/cicd-demo -n argocd --timeout=300s
 ```
 
 不要只依賴 `kubectl rollout undo`：Argo CD 啟用 self-heal，Git 沒改時可能把叢集再次同步回壞版本。
@@ -368,8 +348,8 @@ kubectl rollout status deployment/cicd-demo -n cicd-demo --timeout=300s
 - DNS：`se218.net -> 114.37.200.155`。
 - HTTP：Nginx 回 `504 Gateway Time-out`。
 - HTTPS：certificate hostname 不符合 `se218.net`。
-- 判讀：edge/Nginx 有回應，但 upstream 與 TLS 尚未完成；不能宣稱 Minikube workload 已上線。
-- 下一步：依第 6 節完成 NodePort 直測、Nginx `<MINIKUBE_IP>:30080` 與 Certbot。
+- 判讀：公網入口另有 upstream 與憑證問題，不能拿它證明 Minikube workload 狀態。
+- 決策：本次 CD 驗收改為本機 VM NodePort；Nginx、DNS 與 TLS 保留為未處理的延伸項目，不宣稱完成。
 
 ### Debug 6：Kubernetes 不認識 Argo CD `Application`
 
@@ -380,10 +360,10 @@ kubectl rollout status deployment/cicd-demo -n cicd-demo --timeout=300s
 - 修正：先以官方 server-side apply 安裝 Argo CD，等待 CRD Established 與 controllers Available，再重新套用 Application。
 - 驗證命令：`kubectl get crd applications.argoproj.io`、`kubectl get pods -n argocd`、`kubectl apply -f argocd/application.yaml`。
 - 同時觀察：當時已在 `~/0717-cicd-demo` 內又執行 `git clone`，產生巢狀 repo 的風險；這不是 CRD 錯誤根因，但後續應先用 `pwd` 與 `git remote get-url origin` 確認位置，避免再次 clone。
-- 狀態：修正步驟已補入報告；se218 實際安裝與 Application 成功狀態仍待 operator 執行後驗證。
+- 狀態：2026-07-17 已驗證 CRD condition met、Argo CD deployments Available、7 個 Pods Running；Application sync 仍待 operator 執行後驗證。
 
 ## 10. 最終交付界線
 
 目前已完成：repo、CI、coverage gate、GHCR、immutable SHA、GitOps branch、自動 manifest commit、Argo CD manifests、branch protection、兩版技術文件。
 
-仍需我在 se218 手動完成：Minikube 狀態確認、Argo CD bootstrap/Application、NodePort health、Nginx upstream、TLS，以及公網 end-to-end 驗收。
+仍需我在本機 VM 手動完成：套用 Argo CD Application、截圖 V1 NodePort、合併 V2 PR 並截圖 rolling update 與 V2 回應。Nginx、DNS、TLS 不在本次完成範圍。

@@ -11,10 +11,8 @@ spec:
     path: k8s
   destination:
     server: https://kubernetes.default.svc
-    namespace: cicd-demo
+    namespace: argocd
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
