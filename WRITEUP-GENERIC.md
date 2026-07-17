@@ -2,7 +2,7 @@
 
 本文件將 [DevOps 綜合 Workshop](https://hackmd.io/@yillkid/S1llE_naZx) 整理成可重用的 step-by-step 教學。實際作業成果、Actions run 證據與 debug 時間線請看 [WRITEUP.md](./WRITEUP.md)。
 
-> 重要：GitHub/GHCR/GitOps 可以自動化；Minikube、Argo CD bootstrap、Nginx 與 TLS 仍需由具備部署主機權限的操作者完成。
+> 重要：GitHub/GHCR/GitOps 可以自動化；Minikube 與 Argo CD bootstrap 仍需由具備部署主機權限的操作者完成。只做本機 VM demo 時，NodePort 驗證即可；Nginx、DNS 與 TLS 是選用的公網延伸。
 
 ## 1. 目標與驗收條件
 
@@ -17,7 +17,7 @@ Pull Request
   -> 更新 gitops branch 的 Deployment image SHA
   -> Argo CD 偵測差異並同步
   -> Minikube rolling update
-  -> Nginx / TLS 對外提供服務
+  -> VM NodePort 驗證（選用：Nginx / TLS 對外服務）
 ```
 
 完成時應符合：
@@ -29,7 +29,7 @@ Pull Request
 - [ ] Argo CD 顯示 Application 為 `Synced`、`Healthy`。
 - [ ] Kubernetes Deployment rollout 成功，兩個 Pod Ready。
 - [ ] NodePort health check 回傳 `{"status":"ok"}`。
-- [ ] `https://<DOMAIN>/health` 使用正確 hostname 憑證並回傳 `{"status":"ok"}`。
+- [ ] 本機 VM demo 可由 NodePort 驗證 V1 → V2；若需要公網，再驗證 `https://<DOMAIN>/health`。
 
 本教學使用下列 placeholders：
 
@@ -38,8 +38,8 @@ Pull Request
 | `<GITHUB_USER>` | GitHub 帳號 |
 | `<github_user_lowercase>` | GHCR 使用的小寫帳號 |
 | `<REPO>` | repository 名稱 |
-| `<DOMAIN>` | 對外網域 |
-| `<K8S_NAMESPACE>` | Kubernetes namespace |
+| `<DOMAIN>` | 選用的對外網域 |
+| `<K8S_NAMESPACE>` | Kubernetes namespace；可使用已存在的 `argocd` |
 | `<APP_NAME>` | Deployment、Service、Argo CD Application 名稱 |
 | `<NODE_PORT>` | 30000–32767 範圍內的 NodePort |
 | `<MINIKUBE_IP>` | 在部署主機執行 `minikube ip` 的結果 |
@@ -61,7 +61,8 @@ Pull Request
                                            Argo CD
                                               |
                                               v
-                 Internet -> Nginx -> Minikube NodePort -> Service -> Pods
+                 VM terminal -------> Minikube NodePort -> Service -> Pods
+                 Internet -> Nginx --^（選用）
 ```
 
 `main` 放應用程式、測試、Dockerfile、workflow 與宣告式部署檔的開發版本；它受 branch protection 保護。`gitops` 是實際部署來源，workflow 只修改其中的 image tag。Argo CD 的 `targetRevision` 指向 `gitops`，因此應用程式碼版本與叢集 desired state 分離。
@@ -76,7 +77,6 @@ Pull Request
 ├── app/main.py                # FastAPI 服務與 health endpoint
 ├── tests/test_main.py         # API tests
 ├── k8s/
-│   ├── namespace.yaml
 │   ├── deployment.yaml        # GHCR image、2 replicas、probes
 │   └── service.yaml           # NodePort
 ├── argocd/application.yaml    # Argo CD 追蹤 gitops/k8s
@@ -99,13 +99,13 @@ Pull Request
 ### 操作者必須手動負責
 
 - 建立 GitHub repo、確認 Actions 權限、設定 branch protection、設定 GHCR package visibility。
-- SSH 登入 `<DOMAIN>` 所在主機，安裝／啟動 Minikube 與 Argo CD。
+- 登入部署 VM，安裝／啟動 Minikube 與 Argo CD。
 - 將 Argo CD Application 套用到該叢集。
-- 取得實際 `<MINIKUBE_IP>`，設定 Nginx upstream。
-- 確認 DNS、80/443 firewall，申請正確 TLS 憑證。
+- 取得實際 `<MINIKUBE_IP>` 並直測 NodePort。
+- 若需要公網，再設定 Nginx、DNS、80/443 firewall 與 TLS 憑證。
 - 完成端到端驗收與故障演練。
 
-需要的工具：Git、GitHub 帳號、Python 3.11、Docker；部署 主機另需 `kubectl`、`minikube`、Nginx，以及選用的 Certbot。開始前確認：
+需要的工具：Git、GitHub 帳號、Python 3.11、Docker；部署 VM 另需 `kubectl`、`minikube`，公網延伸才需要 Nginx 與 Certbot。開始前確認：
 
 ```bash
 git --version
@@ -328,6 +328,8 @@ spec:
       - CreateNamespace=true
 ```
 
+`CreateNamespace=true` 適合建立獨立的 `<K8S_NAMESPACE>`。若 workload 要共用已存在的 `argocd` namespace，將 destination 與 workload manifests 都設為 `argocd`，並刪除 `CreateNamespace=true`；不要讓 Application 管理 Argo CD 自己的 Namespace manifest。
+
 ## 8. 部署主機手動 bootstrap（必須由操作者執行）
 
 以下命令要在能控制 部署 Minikube 的主機上執行，不是在 GitHub runner 執行。
@@ -349,21 +351,24 @@ kubectl get nodes -o wide
 依 [Argo CD 官方 Getting Started](https://argo-cd.readthedocs.io/en/stable/getting_started/)：
 
 ```bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl get crd applications.argoproj.io
 kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
 kubectl get pods -n argocd
 ```
 
-若 namespace 已存在，第一行會回 `AlreadyExists`；直接繼續即可。所有必要 Pod 應為 `Running`／Ready。
+第一行是 idempotent namespace 建立方式。server-side apply 可避免大型 CRD 超過 client-side annotation 大小限制。`applications.argoproj.io` 必須 Established，所有必要 Pod 也應為 `Running`／Ready。
 
 ### Step 8.3：套用 Application
 
-先在 部署 主機 clone repo，或把 `argocd/application.yaml` 傳到主機：
+只有 deployment host 尚未存在 repo 時才 clone；如果 prompt 已在 repo 內，先檢查 `pwd` 與 `git remote get-url origin`，不要再次 clone 造成巢狀目錄：
 
 ```bash
-git clone https://github.com/<GITHUB_USER>/<REPO>.git
-cd <REPO>
+pwd
+git remote get-url origin
+git pull --ff-only
 kubectl apply -f argocd/application.yaml
 kubectl get applications -n argocd
 kubectl describe application <APP_NAME> -n argocd
@@ -380,9 +385,9 @@ curl --fail "http://${MINIKUBE_IP}:<NODE_PORT>/health"
 kubectl get service <APP_NAME> -n <K8S_NAMESPACE>
 ```
 
-預期回傳 `{"status":"ok"}`。若這一步不通，先修 Kubernetes／網路，不要先改 Nginx。
+預期回傳 `{"status":"ok"}`。本機 VM demo 到此即可完成；若這一步不通，先修 Kubernetes／網路，不要先改 Nginx。
 
-### Step 8.5：設定 Nginx upstream
+### Step 8.5（選用）：設定 Nginx upstream
 
 在 `<DOMAIN>` 的 Nginx HTTP server block 設定：
 
@@ -409,7 +414,7 @@ sudo systemctl reload nginx
 curl --fail http://<DOMAIN>/health
 ```
 
-### Step 8.6：DNS 與 TLS / Certbot
+### Step 8.6（選用）：DNS 與 TLS / Certbot
 
 先確認 `<DOMAIN>` 的 DNS A/AAAA record 指向這台 Nginx，且 80/443 可從外部到達。HTTP health 成功後才申請憑證：
 
@@ -448,7 +453,20 @@ MINIKUBE_IP=$(minikube ip)
 curl --fail "http://${MINIKUBE_IP}:<NODE_PORT>/health"
 ```
 
-### 公網
+### V1 → V2 rolling update
+
+先讓 `/` 回傳可辨識的 `"build":"v1"` 並截圖，再開 PR 將同一欄位改為 `v2`。merge 後仍由 workflow 部署新的 commit-SHA image；不要把 GitOps image 改成可變的 `:v2` tag。
+
+```bash
+kubectl get pods -n <K8S_NAMESPACE> -l app=<APP_NAME> -w
+kubectl rollout status deployment/<APP_NAME> -n <K8S_NAMESPACE> --timeout=300s
+kubectl get application <APP_NAME> -n argocd
+curl --fail "http://$(minikube ip):<NODE_PORT>/"
+```
+
+前後截圖應顯示不同 SHA、Pods 被替換、Application 回到 `Synced / Healthy`，最後 `/` 回傳 `"build":"v2"`。
+
+### 公網（選用）
 
 ```bash
 curl -i http://<DOMAIN>/health
@@ -507,6 +525,20 @@ kubectl describe pod -n <K8S_NAMESPACE> <POD_NAME>
 ```
 
 確認 GHCR image 名稱全小寫、SHA 存在、package 是 Public；private package 則建立並引用 `imagePullSecret`。
+
+### `no matches for kind "Application"`
+
+完整訊息通常包含 `resource mapping not found` 與 `ensure CRDs are installed first`。這表示 Kubernetes API 尚未註冊 Argo CD Application CRD：
+
+```bash
+kubectl get crd applications.argoproj.io
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
+kubectl apply -f argocd/application.yaml
+```
+
+不要先改 `apiVersion` 或反覆套用 Application；先確認目前 kube context、CRD 與 Argo CD controllers。
 
 ### Argo CD 為 `OutOfSync` 或 `Degraded`
 
