@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: ghcr.io/graylee0128/0717-cicd-demo:b935e700cfe161c5f717b5d38227126af66d87f6
+          image: ghcr.io/graylee0128/0717-cicd-demo:726ea4445a791024d1a66213d3ff65ee50333cc5
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
