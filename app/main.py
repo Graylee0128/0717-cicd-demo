@@ -9,7 +9,7 @@ app = FastAPI(title="0717 CI/CD Demo")
 
 @app.get("/")
 def root():
-    return {"service": "0717-cicd-demo", "version": VERSION, "build": "v8"}
+    return {"service": "0717-cicd-demo", "version": VERSION, "build": "v9"}
 
 
 @app.get("/health")
